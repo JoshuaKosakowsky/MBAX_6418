@@ -1,0 +1,21 @@
+# ---- Environment / secrets (every teammate supplies their own) ----
+.env
+
+# ---- Data (downloaded on demand; do not commit) ----
+data/raw/
+data/processed/
+data/samples/
+
+# ---- Generated dashboard artifacts (built from classified results) ----
+output/
+
+# ---- Python ----
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+
+# ---- OS / editor ----
+.DS_Store
+.idea/
+.vscode/
