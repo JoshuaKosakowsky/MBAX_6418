@@ -38,7 +38,16 @@ def _call_model(
     kwargs = {"model": model, "messages": messages}
     if use_responses_format and config.use_responses_format():
         kwargs["response_format"] = {"type": "json_object"}
-    resp = client.chat.completions.create(**kwargs)
+    try:
+        resp = client.chat.completions.create(**kwargs)
+    except Exception:
+        # Some OpenAI-compatible servers (e.g. vLLM without a JSON grammar)
+        # reject response_format. Fall back to prompt-instructed JSON.
+        if "response_format" in kwargs:
+            kwargs.pop("response_format")
+            resp = client.chat.completions.create(**kwargs)
+        else:
+            raise
     content = resp.choices[0].message.content
     if not content:
         raise RuntimeError("empty model response")
