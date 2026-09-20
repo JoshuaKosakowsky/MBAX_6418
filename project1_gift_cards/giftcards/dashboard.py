@@ -108,14 +108,14 @@ TEMPLATE = r"""<!DOCTYPE html>
   const SENT_LABEL = {positive:'Positive',neutral:'Neutral',negative:'Negative'};
 
   document.getElementById('hdr-sent').textContent =
-    DATA.length + ' classified reviews (text-only)';
+    DATA.filter(d=>d.status!=='error').length + ' classified reviews (text-only)';
 
   function renderKpis(){
     const s = DATA.filter(d=>d.status!=='error');
-    const sent = c=>Math.round(s.filter(d=>d.sentiment===c).length/s.length*100);
+    const p = distPcts(counts(s,'sentiment'), ['positive','neutral','negative']);
     document.getElementById('kpis').innerHTML =
-      kpi('Total', s.length) + kpi('Positive', sent('positive')+'%', 'var(--pos)') +
-      kpi('Neutral', sent('neutral')+'%', 'var(--neu)') + kpi('Negative', sent('negative')+'%', 'var(--neg)') +
+      kpi('Total', s.length) + kpi('Positive', p[0]+'%', 'var(--pos)') +
+      kpi('Neutral', p[1]+'%', 'var(--neu)') + kpi('Negative', p[2]+'%', 'var(--neg)') +
       kpi('Top emotion', topEmotion(s), 'var(--accent)') +
       kpi('Avg. confidence', avgConfidence(s));
   }
