@@ -20,7 +20,7 @@ import json
 import sys
 from pathlib import Path
 
-from giftcards import classify, config, dashboard, download, evaluate, sample
+from giftcards import classify, config, dashboard, download, evaluate, eval_dashboard, sample
 
 
 # --- subcommands ----------------------------------------------------------
@@ -131,6 +131,16 @@ def cmd_evaluate(args):
                   f"c={d['confidence']} | {d['title']} :: {d['text'][:70]}")
 
 
+def cmd_eval_dashboard(args):
+    """Build the evaluation-results dashboard (single-file HTML)."""
+    src = Path(args.input) if args.input else config.PROCESSED_DIR / "eval_scored.jsonl"
+    if not src.exists():
+        sys.exit(f"Input not found: {src}. Run `main.py evaluate` first.")
+    rows = [json.loads(l) for l in src.open() if l.strip()]
+    out = Path(args.output) if args.output else None
+    eval_dashboard.build(rows, out_path=out, model=args.model)
+
+
 def cmd_dashboard(args):
     src = Path(args.input) if args.input else _latest_classified()
     if not src.exists():
@@ -201,6 +211,12 @@ def build_parser() -> argparse.ArgumentParser:
     ev.add_argument("--show-errors", type=int, default=1000)
     ev.add_argument("--output", default=None)
     ev.set_defaults(fn=cmd_evaluate)
+
+    evd = sub.add_parser("eval-dashboard", help="build the evaluation results dashboard")
+    evd.add_argument("--input", default=None)
+    evd.add_argument("--output", default=None)
+    evd.add_argument("--model", default=None)
+    evd.set_defaults(fn=cmd_eval_dashboard)
     return p
 
 
