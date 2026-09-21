@@ -20,7 +20,7 @@ import json
 import sys
 from pathlib import Path
 
-from giftcards import classify, config, dashboard, download, sample
+from giftcards import classify, config, dashboard, download, evaluate, sample
 
 
 # --- subcommands ----------------------------------------------------------
@@ -79,6 +79,56 @@ def cmd_smoke(args):
         print(f"  {r.get('rating')}★ -> {r.get('sentiment')!s:8} / {r.get('primary_emotion')!s:8} conf={r.get('sentiment_confidence')}")
     if len(ok) == 0:
         sys.exit("SMOKE FAILED: no successful classifications")
+
+
+def cmd_evaluate(args):
+    """Score the binary classifier on a small batch against rating-derived labels.
+
+    The model classifies text-only (binary prompt); the rating is used ONLY to
+    compute the reference afterwards (>=4 POSITIVE, else NEGATIVE).
+    """
+    from giftcards.prompts import build_binary_messages, parse_binary_classification
+
+    src = Path(args.input) if args.input else config.SAMPLES_DIR / "sample.jsonl"
+    if not src.exists():
+        sys.exit(f"Input not found: {src}. Run `main.py sample` first.")
+
+    reviews = [json.loads(l) for l in src.open() if l.strip()]
+    batch = evaluate.build_eval_batch(reviews, args.size, seed=args.seed)
+    print(f"eval batch: {len(batch)} reviews "
+          f"({sum(1 for r in batch if evaluate.rating_score_label(r.get('rating'))=='POSITIVE')} "
+          f"rating-positive / "
+          f"{sum(1 for r in batch if evaluate.rating_score_label(r.get('rating'))=='NEGATIVE')} "
+          f"rating-negative)")
+
+    client = classify.get_client()
+    model = args.model or config.default_model()
+    results = classify.classify_batch(
+        batch, client, model=model,
+        max_workers=args.concurrency,
+        messages_fn=lambda r: build_binary_messages(r.get("title", ""), r.get("text", "")),
+        parse_fn=parse_binary_classification,
+        checkpoint_path=config.PROCESSED_DIR / "eval_batch.jsonl",
+    )
+    ok = [r for r in results if r.get("status") == "ok"]
+    pairs = []
+    for r in ok:
+        pairs.append((evaluate.rating_score_label(r.get("rating")), (r.get("label") or "").upper()))
+    res = evaluate.score(pairs)
+    evaluate.attach_disagreements(res, ok)
+    print(evaluate.pretty_report(res))
+
+    out = Path(args.output) if args.output else config.PROCESSED_DIR / "eval_scored.jsonl"
+    with open(out, "w", encoding="utf-8") as f:
+        for r in sorted(ok, key=lambda r: float(r.get("rating") or 0)):
+            f.write(json.dumps(r, default=str) + "\n")
+    print(f"\nSaved scored batch -> {out}")
+
+    if res.disagreements:
+        print(f"\nReviews the model gets WRONG vs the rating ({len(res.disagreements)}):")
+        for d in res.disagreements[:args.show_errors]:
+            print(f"   {d['rating']}* ref={d['truth']:<8} pred={d['pred']:<8} "
+                  f"c={d['confidence']} | {d['title']} :: {d['text'][:70]}")
 
 
 def cmd_dashboard(args):
@@ -141,6 +191,16 @@ def build_parser() -> argparse.ArgumentParser:
     db.add_argument("--input", default=None)
     db.add_argument("--max-rows", type=int, default=None)
     db.set_defaults(fn=cmd_dashboard)
+
+    ev = sub.add_parser("evaluate", help="score binary classifier against rating-derived labels")
+    ev.add_argument("--input", default=None)
+    ev.add_argument("--size", type=int, default=100)
+    ev.add_argument("--seed", type=int, default=None)
+    ev.add_argument("--model", default=None)
+    ev.add_argument("--concurrency", type=int, default=None)
+    ev.add_argument("--show-errors", type=int, default=1000)
+    ev.add_argument("--output", default=None)
+    ev.set_defaults(fn=cmd_evaluate)
     return p
 
 
