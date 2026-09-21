@@ -225,12 +225,11 @@ tbody tr:hover td{background:var(--surface-2)}
 <div class="foot" id="foot"></div>
 </div>
 
-<script type="application/json" id="summary">__SUMMARY_JSON__</script>
-<script type="application/json" id="rows">__ROWS_JSON__</script>
+<script>window.__DATA__={summary:__SUMMARY_JSON__,rows:__ROWS_JSON__};</script>
 <script>
 (function(){
-  const S = JSON.parse(document.getElementById('summary').textContent);
-  const ROWS = JSON.parse(document.getElementById('rows').textContent);
+  const S = window.__DATA__.summary;
+  const ROWS = window.__DATA__.rows;
   const $ = id => document.getElementById(id);
   const esc = s => String(s ?? "").replace(/[&<>"']/g, c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
   const pct = x => Math.round(x*100);
@@ -496,8 +495,19 @@ def build(results: Iterable[dict], out_path: Path | None = None, model: str = "n
     }
     rows_json = [_trim_row(r) for r in ok]
 
-    html = TEMPLATE.replace("__SUMMARY_JSON__", json.dumps(summary, ensure_ascii=False))
-    html = html.replace("__ROWS_JSON__", json.dumps(rows_json, ensure_ascii=False))
+    # Embed JSON by escaping "<" as \u003c (valid JSON escape). A real HTML
+    # tokenizer mis-parses a <script> block whose raw text contains "<" sequences
+    # (e.g. review text with "<br />"), which silently empties the element and
+    # breaks JSON.parse. Escaping makes the data block tokenizer-proof.
+    def _safe_json(dumps: str) -> str:
+        return dumps.replace("<", "\\u003c")
+
+    html = TEMPLATE.replace(
+        "__SUMMARY_JSON__", _safe_json(json.dumps(summary, ensure_ascii=False))
+    )
+    html = html.replace(
+        "__ROWS_JSON__", _safe_json(json.dumps(rows_json, ensure_ascii=False))
+    )
 
     target = out_path or config.OUTPUT_DIR / "eval_dashboard.html"
     target.parent.mkdir(parents=True, exist_ok=True)
