@@ -1,15 +1,15 @@
-"""Score the binary classifier against a rating-derived reference label.
+"""Score the classifier against a rating-derived reference label.
 
-The reference ("correct answer") is derived from the STAR RATING only and is
-used solely for CHECKING afterwards — the model never sees the rating. Map:
-    rating >= 4  -> POSITIVE
-    rating <  4  -> NEGATIVE
+The reference ("correct answer") is derived from the STAR RATING only and is used
+solely for CHECKING afterwards — the model never sees the rating. Three classes:
+    rating in {4, 5} -> POSITIVE
+    rating == 3      -> NEUTRAL
+    rating in {1, 2} -> NEGATIVE
 
 The corpus is heavily skewed toward 4-5 stars, so a naive accuracy on a random
-batch would look flattering. To keep that lopsidedness from fooling us we (a)
-build a batch balanced ~50/50 between rating-positive and rating-negative so
-per-class metrics are measurable, and (b) report balanced accuracy and the
-natural class balance so the skew stays visible.
+batch would look flattering most classes invisible. To keep that lopsidedness
+from fooling us we build a balanced batch (~equal per class, fixed seed) so every
+class is measured, and we report balanced accuracy (mean per-class recall).
 """
 
 from __future__ import annotations
@@ -18,19 +18,22 @@ import random
 from dataclasses import dataclass, field
 from typing import Iterable
 
-CLASSES = ["NEGATIVE", "POSITIVE"]
-
-RATING_THRESHOLD = 4  # >=4 => POSITIVE
+CLASSES = ["NEGATIVE", "NEUTRAL", "POSITIVE"]
 
 
 def rating_score_label(rating) -> str:
-    """Reference label derived from the star rating."""
-    return "POSITIVE" if (rating or 0) >= RATING_THRESHOLD else "NEGATIVE"
+    """Reference label derived from the star rating (three classes)."""
+    r = float(rating or 0)
+    if r >= 4:
+        return "POSITIVE"
+    if r == 3:
+        return "NEUTRAL"
+    return "NEGATIVE"
 
 
 def build_eval_batch(reviews: Iterable[dict], size: int, seed: int | None = None) -> list[dict]:
-    """A balanced eval batch (~50/50 rating-pos / rating-neg) so per-class
-    metrics are meaningful despite the corpus skew. Never overflows ``size``.
+    """A balanced eval batch (~equal per class) so every class is measured despite
+    the corpus skew. Fixed seed -> reproducible set every time. Never overflows ``size``.
     """
     reviews = list(reviews)
     n = len(reviews)
@@ -38,10 +41,14 @@ def build_eval_batch(reviews: Iterable[dict], size: int, seed: int | None = None
         return reviews[:]
     idx = list(range(n))
     rng = random.Random(seed)
-    pos = [i for i in idx if rating_score_label(reviews[i].get("rating")) == "POSITIVE"]
-    neg = [i for i in idx if rating_score_label(reviews[i].get("rating")) == "NEGATIVE"]
-    half = max(0, size // 2)
-    chosen = rng.sample(pos, min(half, len(pos))) + rng.sample(neg, min(half, len(neg)))
+    buckets = {
+        c: [i for i in idx if rating_score_label(reviews[i].get("rating")) == c]
+        for c in CLASSES
+    }
+    per = max(1, size // len(CLASSES))
+    chosen = []
+    for c in CLASSES:
+        chosen.extend(rng.sample(buckets[c], min(per, len(buckets[c]))))
     chosen_set = set(chosen)
     rest = [i for i in idx if i not in chosen_set]
     rng.shuffle(rest)

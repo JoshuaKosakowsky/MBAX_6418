@@ -37,26 +37,31 @@ class TestExtractJson:
 
 
 class TestParseClassification:
-    def test_valid(self):
+    """Three-class label parsing via the canonical parse_classification alias."""
+
+    def test_valid_label(self):
         out = parse_classification(
-            '{"sentiment":"positive","primary_emotion":"joy",'
-            '"sentiment_confidence":0.92,"emotion_confidence":0.8,"evidence":"always good"}'
+            '{"label":"POSITIVE","confidence":0.92,"primary_emotion":"joy","reason":"always good"}'
         )
-        assert out["sentiment"] == "positive"
+        assert out["label"] == "POSITIVE"
         assert out["primary_emotion"] == "joy"
-        assert out["sentiment_confidence"] == 0.92
+        assert out["confidence"] == 0.92
 
-    def test_rejects_bad_sentiment(self):
-        with pytest.raises(ValueError):
-            parse_classification('{"sentiment":"mega","primary_emotion":"joy"}')
+    def test_neutral_label(self):
+        out = parse_classification(
+            '{"label":"NEUTRAL","confidence":0.5,"primary_emotion":"trust","reason":"as expected"}'
+        )
+        assert out["label"] == "NEUTRAL"
 
-    def test_rejects_bad_emotion(self):
+    def test_rejects_unknown_label(self):
         with pytest.raises(ValueError):
-            parse_classification('{"sentiment":"positive","primary_emotion":"euphoria"}')
+            parse_classification('{"label":"MEGA","confidence":0.5,"primary_emotion":"joy"}')
 
     def test_confidence_clamped(self):
-        out = parse_classification('{"sentiment":"neutral","primary_emotion":"neutral","sentiment_confidence":1.7}')
-        assert out["sentiment_confidence"] == 1.0
+        out = parse_classification(
+            '{"label":"NEGATIVE","confidence":1.7,"primary_emotion":"anger"}'
+        )
+        assert out["confidence"] == 1.0
 
 
 class TestPrompt:

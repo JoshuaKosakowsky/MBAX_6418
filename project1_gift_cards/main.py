@@ -95,11 +95,9 @@ def cmd_evaluate(args):
 
     reviews = [json.loads(l) for l in src.open() if l.strip()]
     batch = evaluate.build_eval_batch(reviews, args.size, seed=args.seed)
-    print(f"eval batch: {len(batch)} reviews "
-          f"({sum(1 for r in batch if evaluate.rating_score_label(r.get('rating'))=='POSITIVE')} "
-          f"rating-positive / "
-          f"{sum(1 for r in batch if evaluate.rating_score_label(r.get('rating'))=='NEGATIVE')} "
-          f"rating-negative)")
+    from collections import Counter
+    comp = Counter(evaluate.rating_score_label(r.get("rating")) for r in batch)
+    print("eval batch: " + ", ".join(f"{k}: {v}" for k, v in comp.items()))
 
     client = classify.get_client()
     model = args.model or config.default_model()
@@ -254,9 +252,9 @@ def build_parser() -> argparse.ArgumentParser:
     db.add_argument("--max-rows", type=int, default=None)
     db.set_defaults(fn=cmd_dashboard)
 
-    ev = sub.add_parser("evaluate", help="score binary classifier against rating-derived labels")
+    ev = sub.add_parser("evaluate", help="score classifier against rating-derived labels")
     ev.add_argument("--input", default=None)
-    ev.add_argument("--size", type=int, default=100)
+    ev.add_argument("--size", type=int, default=150, help="batch size (~50 per class)")
     ev.add_argument("--seed", type=int, default=None)
     ev.add_argument("--model", default=None)
     ev.add_argument("--concurrency", type=int, default=None)

@@ -17,7 +17,7 @@ from typing import Iterable
 
 from . import config, evaluate
 
-CLASS_ORDER = ["NEGATIVE", "POSITIVE"]
+CLASS_ORDER = ["NEGATIVE", "NEUTRAL", "POSITIVE"]
 
 TEMPLATE = r"""<!DOCTYPE html>
 <html lang="en" data-theme="dark">
@@ -80,7 +80,7 @@ header{display:flex;align-items:flex-start;justify-content:space-between;gap:20p
 .panel h2{margin:0 0 4px;font-size:15px;font-weight:650;letter-spacing:-.1px}
 .panel .desc{margin:0 0 16px;color:var(--muted);font-size:13px}
 /* confusion matrix */
-.matrix{display:grid;grid-template-columns:auto auto auto;gap:8px;place-items:center}
+.matrix{display:block}
 .matrix .axis{color:var(--muted);font-size:12px;text-transform:uppercase;letter-spacing:1px}
 .cell{width:100%;border-radius:12px;padding:16px 10px;text-align:center;position:relative}
 .cell .n{font-size:30px;font-weight:800;font-variant-numeric:tabular-nums}
@@ -234,31 +234,40 @@ tbody tr:hover td{background:var(--surface-2)}
     S.balanced ? pct(S.balanced_accuracy)+'% balanced' : ''].filter(Boolean)
     .map(x => '<span class="pill '+ (x.includes('wrong') ? 'bad' : 'good') +'">'+esc(x)+'</span>').join(' ');
 
-  // KPIs
-  const neg = S.per_class.NEGATIVE, pos = S.per_class.POSITIVE;
+  // KPIs (class-generic over S.per_class)
+  const cols = S.classes || ['NEGATIVE','NEUTRAL','POSITIVE'];
   const kpis = [
     ['Agreement', pct(S.overall_accuracy)+'%', 'good'],
     ['Correct', S.right, 'good'],
     ['Wrong', S.wrong, 'bad'],
     ['Balanced accuracy', pct(S.balanced_accuracy)+'%', ''],
-    ['Neg. precision', pct(neg.precision)+'%', ''],
-    ['Neg. recall', pct(neg.recall)+'%', ''],
-    ['Pos. recall', pct(pos.recall)+'%', ''],
     ['Avg confidence', pct(S.avg_confidence)+'%', ''],
   ];
+  cols.forEach(c => {
+    const m = S.per_class[c];
+    kpis.push([c+' recall', pct(m.recall)+'%', ''],
+              [c+' precision', pct(m.precision)+'%', '']);
+  });
   $('kpis').innerHTML = kpis.map(([l,v,c])=>
     '<div class="kpi"><div class="l">'+l+'</div><div class="v '+(c||'')+'">'+v+'</div></div>').join('');
 
-  // confusion matrix
-  const C = S.confusion;
-  const order = ['NEGATIVE','POSITIVE'];
-  $('matrix').innerHTML =
-    '<div class="axis">ref</div><div class="axis">NEGATIVE</div><div class="axis">POSITIVE</div>' +
-    order.flatMap(t => [
-      '<div class="axis">'+t+'</div>',
-      '<div class="cell '+(t==='NEGATIVE'?'ok':'err')+'"><div class="n">'+(C[t].NEGATIVE||0)+'</div><div class="lab">pred NEGATIVE</div></div>',
-      '<div class="cell '+(t==='NEGATIVE'?'err':'ok')+'"><div class="n">'+(C[t].POSITIVE||0)+'</div><div class="lab">pred POSITIVE</div></div>',
-    ]).join('');
+  // confusion matrix (N x N, class-generic)
+  let mh = '<table style="width:100%;border-collapse:collapse;text-align:center">' +
+    '<tr><th style="color:var(--muted);font-size:11px;text-transform:uppercase;text-align:left;padding-bottom:8px">ref →</th>' +
+    cols.map(c=>'<th style="color:var(--muted);font-size:11px;text-transform:uppercase;padding-bottom:8px">'+c+'</th>').join('') + '</tr>';
+  cols.forEach(t => {
+    mh += '<tr><th style="color:var(--muted);font-size:11px;text-transform:uppercase;text-align:left">'+t+'</th>';
+    cols.forEach(p => {
+      const ok = t === p;
+      mh += '<td style="padding:10px 6px;border-radius:10px;background:' +
+        (ok ? 'color-mix(in srgb,var(--good) 16%,var(--surface-2))' : 'color-mix(in srgb,var(--bad) 16%,var(--surface-2))') +
+        ';color:' + (ok ? 'var(--good)' : 'var(--bad)') + '"><div style="font-size:24px;font-weight:800">' +
+        (S.confusion[t][p] || 0) + '</div></td>';
+    });
+    mh += '</tr>';
+  });
+  mh += '</table>';
+  $('matrix').innerHTML = mh;
 
   // mistakes by rating
   const mr = S.disagreement_ratings;
@@ -347,35 +356,33 @@ def _insights(res: evaluate.ScoreResult) -> list[str]:
     lines = []
     agrees = round(res.overall_accuracy * 100)
     lines.append(
-        f"The model agrees with the star rating on {agrees}% of the {res.n} reviews."
+        f"The model matches the rating-derived label on {agrees}% of the {res.n} reviews."
     )
-    neg, pos = res.per_class.get("NEGATIVE"), res.per_class.get("POSITIVE")
+    neg = res.per_class.get("NEGATIVE")
+    neu = res.per_class.get("NEUTRAL")
+    pos = res.per_class.get("POSITIVE")
     if neg and pos:
         lines.append(
-            f"It catches nearly all clearly positive reviews ({round(pos.recall*100)}% recall) "
-            f"and is careful before calling something negative ({round(neg.precision*100)}% precision)."
+            f"It reads clearly positive reviews well ({round(pos.recall*100)}% recall), is careful "
+            f"before calling something negative ({round(neg.precision*100)}% precision)"
+            + (f", and its NEUTRAL class is a separate, mostly-underused tier "
+               f"(recall {round(neu.recall*100)}%)." if neu else ".")
         )
     wrong = res.disagreements
     if wrong:
         from collections import Counter
 
-        by_truth = Counter(d["truth"] for d in wrong)
+        by_class = Counter(d["truth"] for d in wrong)
         by_rating = Counter(d["rating"] for d in wrong)
-        neg_w = by_truth.get("NEGATIVE", 0)
-        pos_w = by_truth.get("POSITIVE", 0)
         worst = by_rating.most_common(1)[0] if by_rating else (None, 0)
-        if neg_w and pos_w:
+        parts = ", ".join(f"{c}: {n} missed" for c, n in by_class.most_common())
+        rating_hint = f"concentrated around ★{worst[0]}." if worst[0] else "."
+        lines.append(f"Errors by reference class — {parts} — {rating_hint}")
+        if neu and neu.support and by_class.get("NEUTRAL", 0) >= neu.support * 0.5:
             lines.append(
-                f"Most mistakes ({neg_w}) are low-rated reviews the model reads as mildly positive — "
-                f"often terse ★3 or conflicting ★1 text — plus {pos_w} is a complaint left under a ★5."
+                "A large share of NEUTRAL (★3) reviews are mislabeled, i.e. the model tends to "
+                "collapse ★3 into another class rather than treat it as its own tier."
             )
-        elif neg_w:
-            lines.append(
-                f"All {neg_w} mistakes are low-rated reviews (rating ≤3) the model read as mildly positive "
-                f"or neutral; most are short ★3 text."
-            )
-        elif worst[0] is not None:
-            lines.append(f"Most mistakes cluster around ★{worst[0]} reviews.")
     return lines
 
 
@@ -395,6 +402,7 @@ def build(results: Iterable[dict], out_path: Path | None = None, model: str = "n
 
     summary = {
         "n": res.n,
+        "classes": CLASS_ORDER,
         "right": res.n - len(res.disagreements),
         "wrong": len(res.disagreements),
         "overall_accuracy": res.overall_accuracy,
