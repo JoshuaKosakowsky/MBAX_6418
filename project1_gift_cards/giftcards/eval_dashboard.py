@@ -93,6 +93,16 @@ header{display:flex;align-items:flex-start;justify-content:space-between;gap:20p
 .bars .track{height:22px;background:var(--surface-2);border-radius:6px;overflow:hidden}
 .bars .fill{border-radius:6px}
 .bars .cnt{font-variant-numeric:tabular-nums;color:var(--muted)}
+/* descriptive view (Step 7) */
+.descgrid{display:grid;grid-template-columns:repeat(auto-fit,minmax(250px,1fr));gap:20px;margin-top:6px}
+.descgrid h3{font-size:12px;text-transform:uppercase;letter-spacing:.8px;color:var(--muted);margin:0 0 14px}
+.dbars .row{display:flex;justify-content:space-between;font-size:12.5px;margin:0 0 4px}
+.dbars .track{height:18px;background:var(--surface-2);border-radius:5px;overflow:hidden;margin-bottom:12px}
+.dbars .fill{height:100%;border-radius:5px}
+.grouped .grow{display:grid;grid-template-columns:64px 1fr;gap:10px;align-items:center;margin-bottom:14px}
+.grouped .grow .lab{font-size:12px;color:var(--muted);text-transform:uppercase;letter-spacing:.5px}
+.grouped .tracks{display:grid;grid-template-columns:1fr 1fr;gap:8px}
+.grouped .sub{font-size:10.5px;color:var(--muted);margin-top:3px}
 .legend{display:flex;gap:16px;flex-wrap:wrap;margin-top:14px;color:var(--muted);font-size:12.5px}
 .legend .sw{display:inline-block;width:10px;height:10px;border-radius:3px;margin-right:6px;vertical-align:-1px}
 /* table */
@@ -147,6 +157,16 @@ tbody tr:hover td{background:var(--surface-2)}
 </div>
 
 <div class="kpis" id="kpis"></div>
+
+<div class="panel" style="margin-bottom:22px">
+  <h2>Descriptive view</h2>
+  <p class="desc">What's in the batch, and how far the model's calls drift from the reference labels by class.</p>
+  <div class="descgrid">
+    <div><h3>Star rating distribution</h3><div class="dbars" id="starDist"></div></div>
+    <div><h3>Reference vs predicted (by class)</h3><div class="grouped" id="refPred"></div></div>
+    <div><h3>Answered right per class</h3><div class="dbars" id="classRight"></div></div>
+  </div>
+</div>
 
 <div class="grid2">
   <div class="panel">
@@ -268,6 +288,35 @@ tbody tr:hover td{background:var(--surface-2)}
   });
   mh += '</table>';
   $('matrix').innerHTML = mh;
+
+  // ---- Descriptive view (Step 7). Bars keep a fixed-height track so a 0
+  // value never collapses the row; widths are finite pct of the max. ----
+  const maxStar = Math.max(1, ...Object.values(S.stars||{}));
+  $('starDist').innerHTML = [1,2,3,4,5].map(k => {
+    const v = S.stars[k] || 0;
+    const w = (v / maxStar * 100).toFixed(2);
+    return '<div class="row"><span>'+k+' <span class="stars">'+'★★★★★'.slice(0,k)+'</span></span><span>'+v+'</span></div>'+
+      '<div class="track"><div class="fill" style="width:'+w+'%;background:var(--accent)"></div></div>';
+  }).join('');
+
+  const maxRP = Math.max(1, ...cols.map(c => Math.max((S.ref_pred[c]||{}).ref||0, (S.ref_pred[c]||{}).pred||0)));
+  $('refPred').innerHTML = cols.map(c => {
+    const rp = S.ref_pred[c] || {ref:0,pred:0};
+    const rw = (rp.ref / maxRP * 100).toFixed(2), pw = (rp.pred / maxRP * 100).toFixed(2);
+    const predColor = rp.pred >= rp.ref ? 'var(--good)' : 'var(--bad)';
+    return '<div class="grow"><span class="lab">'+c+'</span><div><div class="tracks">'+
+      '<div><div class="track"><div class="fill" style="width:'+rw+'%;background:var(--accent)"></div></div><div class="sub">reference '+rp.ref+'</div></div>'+
+      '<div><div class="track"><div class="fill" style="width:'+pw+'%;background:'+predColor+'"></div></div><div class="sub">predicted '+rp.pred+'</div></div>'+
+      '</div></div></div>';
+  }).join('');
+
+  $('classRight').innerHTML = cols.map(c => {
+    const cr = S.class_right[c] || {correct:0,total:0};
+    const pct = cr.total ? Math.round(cr.correct / cr.total * 100) : 0;
+    const color = pct >= 60 ? 'var(--good)' : (pct >= 30 ? 'var(--warn)' : 'var(--bad)');
+    return '<div class="row"><span>'+c+'</span><span>'+cr.correct+' / '+cr.total+' ('+pct+'%)</span></div>'+
+      '<div class="track"><div class="fill" style="width:'+pct+'%;background:'+color+'"></div></div>';
+  }).join('');
 
   // mistakes by rating
   const mr = S.disagreement_ratings;
@@ -400,6 +449,22 @@ def build(results: Iterable[dict], out_path: Path | None = None, model: str = "n
     wrong_by_rating = Counter(d["rating"] for d in res.disagreements)
     avg_conf = (sum((r.get("confidence") or 0) for r in ok) / len(ok)) if ok else 0.0
 
+    # Descriptive aggregates (Step 7) for the at-a-glance visualizations.
+    star_counter = Counter(int(round(float(r.get("rating") or 0))) for r in ok)
+    ref_counts = Counter(evaluate.rating_score_label(r.get("rating")) for r in ok)
+    pred_counts = Counter(
+        (r.get("label") or "").upper() for r in ok
+        if (r.get("label") or "").upper() in CLASS_ORDER
+    )
+    ref_pred = {
+        c: {"ref": ref_counts.get(c, 0), "pred": pred_counts.get(c, 0)}
+        for c in CLASS_ORDER
+    }
+    class_right = {
+        c: {"correct": res.confusion.get((c, c), 0), "total": res.per_class[c].support}
+        for c in CLASS_ORDER
+    }
+
     summary = {
         "n": res.n,
         "classes": CLASS_ORDER,
@@ -408,6 +473,9 @@ def build(results: Iterable[dict], out_path: Path | None = None, model: str = "n
         "overall_accuracy": res.overall_accuracy,
         "balanced_accuracy": res.balanced_accuracy,
         "avg_confidence": round(avg_conf, 3),
+        "stars": {str(k): star_counter.get(k, 0) for k in [1, 2, 3, 4, 5]},
+        "ref_pred": ref_pred,
+        "class_right": class_right,
         "per_class": {
             c: {
                 "precision": m.precision,
