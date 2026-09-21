@@ -7,7 +7,9 @@ data/processed/
 data/samples/
 
 # ---- Generated dashboard artifacts (built from classified results) ----
-output/
+# Keep everything in output/ out of git except the final deliverable dashboard.
+output/*
+!output/eval_dashboard.html
 
 # ---- Python ----
 __pycache__/

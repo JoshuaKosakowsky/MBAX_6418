@@ -17,7 +17,9 @@ def _row(rating, label, confidence=0.8, title="T", text="x"):
 
 
 def _summary(html):
-    return json.loads(html.split('id="summary">')[1].split("</script>")[0])
+    seg = html.split("window.__DATA__=", 1)[1].split("</script>", 1)[0].strip()
+    seg = seg.rstrip(";").replace("summary:", '"summary":', 1).replace(",rows:", ',"rows":', 1)
+    return json.loads(seg)["summary"]
 
 
 def test_build_writes_self_contained_html(tmp_path):
