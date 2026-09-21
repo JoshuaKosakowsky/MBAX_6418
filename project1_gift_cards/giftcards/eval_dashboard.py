@@ -176,6 +176,14 @@ tbody tr:hover td{background:var(--surface-2)}
       <button data-f="ok">Correct</button>
       <button data-f="err">Wrong</button>
     </div>
+    <select id="fStar" title="Filter by star rating" style="background:var(--surface-2);border:1px solid var(--border);color:var(--text);border-radius:10px;padding:9px 12px;font-size:14px">
+      <option value="">All stars</option>
+      <option value="1">★ 1</option>
+      <option value="2">★ 2</option>
+      <option value="3">★ 3</option>
+      <option value="4">★ 4</option>
+      <option value="5">★ 5</option>
+    </select>
     <input id="q" placeholder="Search title or text…"/>
   </div>
   <div class="tablebox">
@@ -266,11 +274,12 @@ tbody tr:hover td{background:var(--surface-2)}
   $('mistakenote').textContent = S.insights[1] ? S.insights[1] : '';
 
   // table with filters + pagination
-  const ROWS_PAGE = 12; let page = 0, filt = 'all';
+  const ROWS_PAGE = 12; let page = 0, filt = 'all', star = '';
   function visible(){
     const q = $('q').value.toLowerCase(); let list = ROWS;
     if (filt === 'ok') list = list.filter(r => r.correct);
     if (filt === 'err') list = list.filter(r => !r.correct);
+    if (star) list = list.filter(r => (r.rating|0) === star);
     if (q) list = list.filter(r => ((r.title||'')+(r.text||'')).toLowerCase().includes(q));
     return list;
   }
@@ -279,8 +288,9 @@ tbody tr:hover td{background:var(--surface-2)}
     const pages = Math.max(1, Math.ceil(list.length/ROWS_PAGE));
     page = Math.min(page, pages-1);
     const seg = list.slice(page*ROWS_PAGE, page*ROWS_PAGE+ROWS_PAGE);
-    $('count').textContent = list.length + ' review' + (list.length===1?'':'s') +
-      (filt==='ok' ? ' · correct' : filt==='err' ? ' · wrong' : '');
+    const tag = (filt==='ok' ? ' · correct' : filt==='err' ? ' · wrong' : '') + (star ? ' · ★'+star : '');
+    $('count').textContent = list.length + ' of ' + ROWS.length + ' review' +
+      (list.length===1?'':'s') + tag;
     $('pg').textContent = (page+1)+' / '+pages;
     $('prev').disabled = page===0; $('next').disabled = page>=pages-1;
     $('rows').innerHTML = seg.map(r => {
@@ -301,6 +311,7 @@ tbody tr:hover td{background:var(--surface-2)}
     b.classList.add('on'); filt = b.dataset.f; page = 0; render();
   });
   $('q').addEventListener('input', () => { page = 0; render(); });
+  $('fStar').addEventListener('change', () => { star = Number($('fStar').value) || ''; page = 0; render(); });
   $('prev').onclick = () => { if (page>0){page--; render();} };
   $('next').onclick = () => { page++; render(); };
 

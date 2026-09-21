@@ -27,6 +27,8 @@ def test_build_writes_self_contained_html(tmp_path):
     assert "Gift Card Review Sentiment" in html
     # placeholders replaced
     assert "__SUMMARY_JSON__" not in html and "__ROWS_JSON__" not in html
+    # Step 4: interactive filter controls are present
+    assert 'id="filtSeg"' in html and 'id="fStar"' in html and 'id="count"' in html
     # embedded data has 4 reviews
     assert '"title": "T"' in html or "T" in html
 
