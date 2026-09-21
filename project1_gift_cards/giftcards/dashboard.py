@@ -108,28 +108,41 @@ TEMPLATE = r"""<!DOCTYPE html>
   const SENT_LABEL = {positive:'Positive',neutral:'Neutral',negative:'Negative'};
 
   document.getElementById('hdr-sent').textContent =
-    DATA.length + ' classified reviews (text-only)';
+    DATA.filter(d=>d.status!=='error').length + ' classified reviews (text-only)';
 
   function renderKpis(){
     const s = DATA.filter(d=>d.status!=='error');
-    const sent = c=>Math.round(s.filter(d=>d.sentiment===c).length/s.length*100);
+    const p = distPcts(counts(s,'sentiment'), ['positive','neutral','negative']);
     document.getElementById('kpis').innerHTML =
-      kpi('Total', s.length) + kpi('Positive', sent('positive')+'%', 'var(--pos)') +
-      kpi('Neutral', sent('neutral')+'%', 'var(--neu)') + kpi('Negative', sent('negative')+'%', 'var(--neg)') +
+      kpi('Total', s.length) + kpi('Positive', p[0]+'%', 'var(--pos)') +
+      kpi('Neutral', p[1]+'%', 'var(--neu)') + kpi('Negative', p[2]+'%', 'var(--neg)') +
       kpi('Top emotion', topEmotion(s), 'var(--accent)') +
       kpi('Avg. confidence', avgConfidence(s));
   }
   function kpi(n,l,c){return '<div class="kpi"><div class="n" '+(c?'style="color:'+c+'"':'')+'>'+esc(n)+'</div><div class="l">'+l+'</div></div>';}
 
   function counts(arr, key){const m={};arr.forEach(d=>{if(d[key])m[d[key]]=(m[d[key]]||0)+1;});return m;}
+
+  // Integer percentages that sum to EXACTLY 100 via largest-remainder method
+  // (each bar rounded independently would drift to 101%/102%).
+  function distPcts(cmap, keys){
+    const total = keys.reduce((a,k)=>a+(cmap[k]||0),0)||1;
+    const raw = keys.map(k=>(cmap[k]||0)/total*100);
+    const floors = raw.map(x=>Math.floor(x));
+    let leftover = 100 - floors.reduce((a,b)=>a+b,0);
+    const order = raw.map((x,i)=>i).sort((i,j)=>
+      (raw[j]-Math.floor(raw[j]))-(raw[i]-Math.floor(raw[i])));
+    for(let n=0;n<leftover;n++){ floors[order[n]]++; }
+    return floors;
+  }
+
   function bars(id, cmap, ordered){
     let el = document.getElementById(id); el.innerHTML='';
-    const byName = cmap;
-    const keys = ordered || Object.keys(byName);
-    const total = Object.values(byName).reduce((a,b)=>a+b,0)||1;
-    keys.forEach(k=>{
-      const v = byName[k]||0;
-      const pct = Math.round(v/total*100);
+    const keys = ordered || Object.keys(cmap);
+    const pctArr = distPcts(cmap, keys);
+    keys.forEach((k,i)=>{
+      const v = cmap[k]||0;
+      const pct = pctArr[i];
       const color = (id==='emo'?EMO_COLORS[k]:SENT_COLORS[k]) || '#888';
       el.innerHTML += '<div class="bar"><div class="row"><span>'+esc(human(label(k)))+'</span><span>'+v+' ('+pct+'%)</span></div>'+
         '<div class="track"><div class="fill" style="width:'+pct+'%;background:'+color+'"></div></div></div>';

@@ -82,6 +82,71 @@ def parse_classification(raw: str) -> dict:
     }
 
 
+BINARY_LABELS = ["POSITIVE", "NEGATIVE"]
+
+# Reusable, self-contained instruction for a strict binary classifier.
+# Outcomes are decided on the written words only (never a star rating, which is
+# deliberately absent from the prompt). Edge cases are resolved by explicit rules
+# so the model returns a clear, parseable answer every time.
+BINARY_SYSTEM_PROMPT = """You are a sentiment classifier for Amazon product reviews.
+
+Given a review's TITLE and TEXT, classify the overall sentiment as POSITIVE or
+NEGATIVE - one of these two labels, nothing else.
+
+Decide ONLY from the words written. No star rating is provided; never invent one.
+
+Edge-case policy (apply these rules):
+- TITLE vs TEXT conflict: trust the TEXT body as the primary signal. Use the title
+  only to help judge tone when the body is neutral.
+- Sarcasm / irony: classify the literal underlying intent, e.g. "great job losing
+  my money" is NEGATIVE.
+- Terse reviews: a single word can decide ("love it" = POSITIVE, "useless" = NEGATIVE).
+- Angry outbursts, rants, and complaints: NEGATIVE.
+- No clear feeling expressed (e.g. "Purchased as a gift."): pick the more likely
+  label and set confidence LOW (about 0.5).
+
+Respond with ONLY a JSON object - no markdown, no prose - with exactly these keys:
+{"label": "POSITIVE" or "NEGATIVE", "confidence": <float 0.0-1.0>, "reason": "<1-10 words>"}
+where reason is a terse justification from the review's words."""
+
+
+def build_binary_user_message(title: str, text: str) -> str:
+    combined = f"{title}\n\n{text}".strip()
+    return (
+        "Review:\n"
+        "------\n"
+        f"{combined}\n\n"
+        'Return only a JSON object: {"label":"POSITIVE"|"NEGATIVE",'
+        '"confidence":<0.0-1.0>,"reason":"<short>"}.'
+    )
+
+
+def build_binary_messages(title: str, text: str) -> list[dict]:
+    return [
+        {"role": "system", "content": BINARY_SYSTEM_PROMPT},
+        {"role": "user", "content": build_binary_user_message(title, text)},
+    ]
+
+
+def parse_binary_classification(raw: str) -> dict:
+    """Parse a binary-classification JSON response. Raises ValueError on garbage."""
+    from .parsing import extract_json_object
+
+    obj = extract_json_object(raw)
+    if not isinstance(obj, dict):
+        raise ValueError("model response did not contain a JSON object")
+
+    label = str(obj.get("label", "")).strip().upper()
+    if label not in BINARY_LABELS:
+        raise ValueError(f"unknown binary label: {label!r}")
+
+    return {
+        "label": label,
+        "confidence": _float(obj.get("confidence")),
+        "reason": str(obj.get("reason", "")).strip()[:120],
+    }
+
+
 def _float(v):
     try:
         f = float(v)

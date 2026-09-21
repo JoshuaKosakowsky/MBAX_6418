@@ -2,7 +2,12 @@
 import pytest
 
 from giftcards.parsing import extract_json_object
-from giftcards.prompts import build_user_message, parse_classification
+from giftcards.prompts import (
+    build_binary_messages,
+    build_user_message,
+    parse_binary_classification,
+    parse_classification,
+)
 
 pytestmark = pytest.mark.unit
 
@@ -65,3 +70,27 @@ class TestPrompt:
         msgs = build_messages({"title": "Hi", "text": "Hello"})
         assert msgs[0]["role"] == "system"
         assert msgs[1]["role"] == "user"
+
+
+class TestBinaryPrompt:
+    def test_messages_take_title_and_text(self):
+        msgs = build_binary_messages("Great gift", "Having Amazon money is always good.")
+        assert msgs[0]["role"] == "system"
+        assert msgs[0]["content"].startswith("You are a sentiment classifier")
+        assert "Great gift" in msgs[1]["content"]
+        assert "Having Amazon money" in msgs[1]["content"]
+
+    def test_parse_binary_ok(self):
+        out = parse_binary_classification(
+            '{"label":"POSITIVE","confidence":0.9,"reason":"always good"}'
+        )
+        assert out["label"] == "POSITIVE"
+        assert out["confidence"] == 0.9
+
+    def test_parse_binary_accepts_lowercase(self):
+        out = parse_binary_classification('{"label":"negative","confidence":0.8,"reason":"x"}')
+        assert out["label"] == "NEGATIVE"
+
+    def test_parse_binary_rejects_unknown(self):
+        with pytest.raises(ValueError):
+            parse_binary_classification('{"label":"meh","confidence":0.5,"reason":"x"}')

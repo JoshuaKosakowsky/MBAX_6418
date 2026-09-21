@@ -38,7 +38,16 @@ def _call_model(
     kwargs = {"model": model, "messages": messages}
     if use_responses_format and config.use_responses_format():
         kwargs["response_format"] = {"type": "json_object"}
-    resp = client.chat.completions.create(**kwargs)
+    try:
+        resp = client.chat.completions.create(**kwargs)
+    except Exception:
+        # Some OpenAI-compatible servers (e.g. vLLM without a JSON grammar)
+        # reject response_format. Fall back to prompt-instructed JSON.
+        if "response_format" in kwargs:
+            kwargs.pop("response_format")
+            resp = client.chat.completions.create(**kwargs)
+        else:
+            raise
     content = resp.choices[0].message.content
     if not content:
         raise RuntimeError("empty model response")
@@ -50,19 +59,28 @@ def classify_one(
     client: openai.OpenAI,
     model: str | None = None,
     retries: int = 2,
+    messages_fn: Callable[[dict], list[dict]] | None = None,
+    parse_fn: Callable[[str], dict] | None = None,
 ) -> dict:
     """Classify a single review, returning review + classification fields.
+
+    ``messages_fn`` builds the chat messages for a review; ``parse_fn`` turns
+    the raw model output into the classification dict. Defaults to the 3-class
+    sentiment/emotion prompt, but any prompt/parser can be injected (e.g. the
+    binary POSITIVE/NEGATIVE classifier).
 
     On final failure the record is returned with status='error' and the error
     message, so a partial batch is never lost.
     """
+    messages_fn = messages_fn or build_messages
+    parse_fn = parse_fn or parse_classification
     model = model or config.default_model()
     out = dict(review)
     last_err = None
     for attempt in range(retries + 1):
         try:
-            raw = _call_model(client, build_messages(review), model)
-            parsed = parse_classification(raw)
+            raw = _call_model(client, messages_fn(review), model)
+            parsed = parse_fn(raw)
             out.update(parsed)
             out["status"] = "ok"
             out["model"] = model
@@ -83,26 +101,51 @@ def classify_batch(
     max_workers: int | None = None,
     progress: Callable[[int, int], None] | None = None,
     max_reviews: int | None = None,
+    checkpoint_path: Path | None = None,
+    messages_fn: Callable[[dict], list[dict]] | None = None,
+    parse_fn: Callable[[str], dict] | None = None,
 ) -> list[dict]:
-    """Classify many reviews concurrently. Preserves input order."""
+    """Classify many reviews concurrently. Preserves input order.
+
+    If ``checkpoint_path`` is given, each completed result is appended to that
+    JSONL file immediately (on the caller thread), so a long run that is
+    interrupted is never fully lost — partial progress is persisted.
+
+    ``messages_fn`` / ``parse_fn`` default to the 3-class sentiment/emotion
+    prompt; pass the binary prompt/parser to score with POSITIVE/NEGATIVE.
+    """
     inputs = reviews if max_reviews is None else reviews[:max_reviews]
     total = len(inputs)
     workers = max_workers or config.max_concurrency()
     results: list[dict] = [None] * total  # type: ignore[list-item]
+    if checkpoint_path is not None:
+        import os
+
+        os.makedirs(checkpoint_path.parent, exist_ok=True)
+    ckpt = open(checkpoint_path, "w", encoding="utf-8") if checkpoint_path else None
 
     def worker(i):
-        r = classify_one(inputs[i], client, model)
-        return i, r
+        return i, classify_one(
+            inputs[i], client, model,
+            messages_fn=messages_fn, parse_fn=parse_fn,
+        )
 
-    with cf.ThreadPoolExecutor(max_workers=workers) as pool:
-        futs = [pool.submit(worker, i) for i in range(total)]
-        done = 0
-        for fut in cf.as_completed(futs):
-            i, r = fut.result()
-            results[i] = r
-            done += 1
-            if progress:
-                progress(done, total)
+    try:
+        with cf.ThreadPoolExecutor(max_workers=workers) as pool:
+            futs = [pool.submit(worker, i) for i in range(total)]
+            done = 0
+            for fut in cf.as_completed(futs):
+                i, r = fut.result()
+                results[i] = r
+                done += 1
+                if ckpt:
+                    ckpt.write(json.dumps(r, default=str) + "\n")
+                    ckpt.flush()
+                if progress:
+                    progress(done, total)
+    finally:
+        if ckpt:
+            ckpt.close()
 
     return [r for r in results if r is not None]
 
