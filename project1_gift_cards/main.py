@@ -20,7 +20,7 @@ import json
 import sys
 from pathlib import Path
 
-from giftcards import classify, config, dashboard, download, evaluate, sample
+from giftcards import classify, config, dashboard, download, evaluate, eval_dashboard, sample
 
 
 # --- subcommands ----------------------------------------------------------
@@ -95,11 +95,9 @@ def cmd_evaluate(args):
 
     reviews = [json.loads(l) for l in src.open() if l.strip()]
     batch = evaluate.build_eval_batch(reviews, args.size, seed=args.seed)
-    print(f"eval batch: {len(batch)} reviews "
-          f"({sum(1 for r in batch if evaluate.rating_score_label(r.get('rating'))=='POSITIVE')} "
-          f"rating-positive / "
-          f"{sum(1 for r in batch if evaluate.rating_score_label(r.get('rating'))=='NEGATIVE')} "
-          f"rating-negative)")
+    from collections import Counter
+    comp = Counter(evaluate.rating_score_label(r.get("rating")) for r in batch)
+    print("eval batch: " + ", ".join(f"{k}: {v}" for k, v in comp.items()))
 
     client = classify.get_client()
     model = args.model or config.default_model()
@@ -129,6 +127,68 @@ def cmd_evaluate(args):
         for d in res.disagreements[:args.show_errors]:
             print(f"   {d['rating']}* ref={d['truth']:<8} pred={d['pred']:<8} "
                   f"c={d['confidence']} | {d['title']} :: {d['text'][:70]}")
+
+
+def cmd_eval_dashboard(args):
+    """Build the evaluation-results dashboard (single-file HTML)."""
+    src = Path(args.input) if args.input else config.PROCESSED_DIR / "eval_scored.jsonl"
+    if not src.exists():
+        sys.exit(f"Input not found: {src}. Run `main.py evaluate` first.")
+    rows = [json.loads(l) for l in src.open() if l.strip()]
+    out = Path(args.output) if args.output else None
+    eval_dashboard.build(rows, out_path=out, model=args.model)
+
+
+def cmd_emotions(args):
+    """Compare the LLM primary emotion against the NRC word-list emotion.
+
+    The LLM emotion comes from the extended binary prompt (Step 5); the NRC
+    emotion is derived offline from the review text with the bundled lexicon.
+    No extra model calls are made here.
+    """
+    from giftcards import nrc
+
+    src = Path(args.input) if args.input else config.PROCESSED_DIR / "eval_scored.jsonl"
+    if not src.exists():
+        sys.exit(f"Input not found: {src}. Run `main.py evaluate` first.")
+    rows = [json.loads(l) for l in src.open() if l.strip()]
+    ok = [r for r in rows if r.get("status") == "ok"]
+    lex = nrc.load_lexicon()
+
+    def _llm(r):
+        e = r.get("primary_emotion")
+        return str(e).lower() if e else None
+
+    llm = [_llm(r) for r in ok]
+    nrc_list = [nrc.primary_emotion(r.get("text", ""), lex) for r in ok]
+    stats = nrc.compare(llm, nrc_list)
+
+    print(f"Reviews: {len(ok)}")
+    print(f"Both-signal pairs : {stats['n']}")
+    print(f"Agree             : {stats['agree']}")
+    print(f"Disagree          : {stats['disagree']}")
+    print(f"Agreement rate    : {stats['agreement_rate']:.1%}")
+    print("\nLLM emotion distribution:", stats["llm_distribution"])
+    print("NRC  emotion distribution:", stats["nrc_distribution"])
+
+    shown = 0
+    for r, l, n in zip(ok, llm, nrc_list):
+        if l and n and l != n:
+            print(f"  LLM={l:<12} NRC={n:<12} | {str(r.get('title') or '')[:28]} :: {(r.get('text') or '')[:64]}")
+            shown += 1
+            if shown >= (args.show or 40):
+                break
+    if shown == 0:
+        print("\nNo divergences to show.")
+
+    out = Path(args.output) if args.output else config.PROCESSED_DIR / "emotion_compare.jsonl"
+    with open(out, "w", encoding="utf-8") as f:
+        for r, n in zip(ok, nrc_list):
+            rr = dict(r)
+            rr["primary_emotion"] = _llm(r)
+            rr["nrc_emotion"] = n
+            f.write(json.dumps(rr, default=str) + "\n")
+    print(f"\nSaved -> {out}")
 
 
 def cmd_dashboard(args):
@@ -192,15 +252,27 @@ def build_parser() -> argparse.ArgumentParser:
     db.add_argument("--max-rows", type=int, default=None)
     db.set_defaults(fn=cmd_dashboard)
 
-    ev = sub.add_parser("evaluate", help="score binary classifier against rating-derived labels")
+    ev = sub.add_parser("evaluate", help="score classifier against rating-derived labels")
     ev.add_argument("--input", default=None)
-    ev.add_argument("--size", type=int, default=100)
+    ev.add_argument("--size", type=int, default=150, help="batch size (~50 per class)")
     ev.add_argument("--seed", type=int, default=None)
     ev.add_argument("--model", default=None)
     ev.add_argument("--concurrency", type=int, default=None)
     ev.add_argument("--show-errors", type=int, default=1000)
     ev.add_argument("--output", default=None)
     ev.set_defaults(fn=cmd_evaluate)
+
+    evd = sub.add_parser("eval-dashboard", help="build the evaluation results dashboard")
+    evd.add_argument("--input", default=None)
+    evd.add_argument("--output", default=None)
+    evd.add_argument("--model", default=None)
+    evd.set_defaults(fn=cmd_eval_dashboard)
+
+    em = sub.add_parser("emotions", help="compare LLM vs NRC primary emotion")
+    em.add_argument("--input", default=None)
+    em.add_argument("--show", type=int, default=40)
+    em.add_argument("--output", default=None)
+    em.set_defaults(fn=cmd_emotions)
     return p
 
 

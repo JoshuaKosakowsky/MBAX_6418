@@ -42,13 +42,13 @@ def test_classify_one_parses_response(monkeypatch):
     def fake_call(client, messages, model):
         assert messages[0]["role"] == "system"
         assert messages[1]["role"] == "user"
-        return ('{"sentiment":"negative","primary_emotion":"anger",'
-                '"sentiment_confidence":0.9,"emotion_confidence":0.7,"evidence":"useless"}')
+        return ('{"label":"NEGATIVE","confidence":0.9,"primary_emotion":"anger",'
+                '"reason":"useless"}')
 
     monkeypatch.setattr(classify, "_call_model", fake_call)
     out = classify.classify_one({"title": "Bad", "text": "Terrible.", "rating": 1.0}, client, model="test-model")
     assert out["status"] == "ok"
-    assert out["sentiment"] == "negative"
+    assert out["label"] == "NEGATIVE"
     assert out["primary_emotion"] == "anger"
     assert out["model"] == "test-model"
     # original fields preserved
@@ -71,8 +71,7 @@ def test_classify_batch_preserves_order(sample_reviews, monkeypatch):
     client = _FakeClient([])
 
     def fake_call(client, messages, model):
-        return ('{"sentiment":"positive","primary_emotion":"joy",'
-                '"sentiment_confidence":1.0,"emotion_confidence":1.0,"evidence":"ok"}')
+        return ('{"label":"POSITIVE","confidence":1.0,"primary_emotion":"joy","reason":"ok"}')
 
     monkeypatch.setattr(classify, "_call_model", fake_call)
     results = classify.classify_batch(sample_reviews, client, model="m", max_workers=4)
