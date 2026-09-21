@@ -91,6 +91,18 @@ class TestBinaryPrompt:
         out = parse_binary_classification('{"label":"negative","confidence":0.8,"reason":"x"}')
         assert out["label"] == "NEGATIVE"
 
+    def test_parse_binary_reads_emotion(self):
+        out = parse_binary_classification(
+            '{"label":"POSITIVE","confidence":0.9,"primary_emotion":"joy","reason":"x"}'
+        )
+        assert out["primary_emotion"] == "joy"
+
+    def test_parse_binary_invalid_emotion_becomes_none(self):
+        out = parse_binary_classification(
+            '{"label":"POSITIVE","confidence":0.9,"primary_emotion":"euphoria","reason":"x"}'
+        )
+        assert out["primary_emotion"] is None
+
     def test_parse_binary_rejects_unknown(self):
         with pytest.raises(ValueError):
             parse_binary_classification('{"label":"meh","confidence":0.5,"reason":"x"}')

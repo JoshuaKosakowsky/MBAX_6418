@@ -84,14 +84,16 @@ def parse_classification(raw: str) -> dict:
 
 BINARY_LABELS = ["POSITIVE", "NEGATIVE"]
 
-# Reusable, self-contained instruction for a strict binary classifier.
-# Outcomes are decided on the written words only (never a star rating, which is
-# deliberately absent from the prompt). Edge cases are resolved by explicit rules
-# so the model returns a clear, parseable answer every time.
+# Reusable, self-contained instruction for a strict binary classifier that also
+# emits a PRIMARY EMOTION (Step 5). Outcomes are decided on the written words only
+# (never a star rating, which is deliberately absent from the prompt). Edge cases
+# are resolved by explicit rules so the model returns a clear, parseable answer.
 BINARY_SYSTEM_PROMPT = """You are a sentiment classifier for Amazon product reviews.
 
-Given a review's TITLE and TEXT, classify the overall sentiment as POSITIVE or
-NEGATIVE - one of these two labels, nothing else.
+Given a review's TITLE and TEXT, do two things:
+1. Classify the overall sentiment as POSITIVE or NEGATIVE - one of these two labels.
+2. Pick the PRIMARY EMOTION the text expresses, one and only one from this fixed set:
+   anger, anticipation, disgust, fear, joy, sadness, surprise, trust.
 
 Decide ONLY from the words written. No star rating is provided; never invent one.
 
@@ -103,10 +105,18 @@ Edge-case policy (apply these rules):
 - Terse reviews: a single word can decide ("love it" = POSITIVE, "useless" = NEGATIVE).
 - Angry outbursts, rants, and complaints: NEGATIVE.
 - No clear feeling expressed (e.g. "Purchased as a gift."): pick the more likely
-  label and set confidence LOW (about 0.5).
+  label and set confidence LOW (about 0.5), and choose the single emotion you
+  weight most heavily from the set.
+- Primary emotion: the dominant emotion, constrained to the set above. If the text
+  is emotionally flat, still choose the closest single emotion (e.g. "trust" or
+  "anticipation" for mildly positive, "fear"/"sadness" for worried complaints).
 
 Respond with ONLY a JSON object - no markdown, no prose - with exactly these keys:
-{"label": "POSITIVE" or "NEGATIVE", "confidence": <float 0.0-1.0>, "reason": "<1-10 words>"}
+{"label": "POSITIVE" or "NEGATIVE",
+ "confidence": <float 0.0-1.0>,
+ "primary_emotion": "anger" or "anticipation" or "disgust" or "fear" or "joy" or
+                    "sadness" or "surprise" or "trust",
+ "reason": "<1-10 words>"}
 where reason is a terse justification from the review's words."""
 
 
@@ -117,7 +127,8 @@ def build_binary_user_message(title: str, text: str) -> str:
         "------\n"
         f"{combined}\n\n"
         'Return only a JSON object: {"label":"POSITIVE"|"NEGATIVE",'
-        '"confidence":<0.0-1.0>,"reason":"<short>"}.'
+        '"confidence":<0.0-1.0>,"primary_emotion":"<one of anger, anticipation, '
+        'disgust, fear, joy, sadness, surprise, trust>","reason":"<short>"}.'
     )
 
 
@@ -129,8 +140,13 @@ def build_binary_messages(title: str, text: str) -> list[dict]:
 
 
 def parse_binary_classification(raw: str) -> dict:
-    """Parse a binary-classification JSON response. Raises ValueError on garbage."""
+    """Parse a binary-classification JSON response. Raises ValueError on garbage.
+
+    primary_emotion is validated against the NRC emotion set when present;
+    if absent/invalid it is set to None rather than failing the sentiment call.
+    """
     from .parsing import extract_json_object
+    from .nrc import NRC_EMOTIONS
 
     obj = extract_json_object(raw)
     if not isinstance(obj, dict):
@@ -140,9 +156,14 @@ def parse_binary_classification(raw: str) -> dict:
     if label not in BINARY_LABELS:
         raise ValueError(f"unknown binary label: {label!r}")
 
+    emotion = str(obj.get("primary_emotion", "")).strip().lower()
+    if emotion not in NRC_EMOTIONS:
+        emotion = None
+
     return {
         "label": label,
         "confidence": _float(obj.get("confidence")),
+        "primary_emotion": emotion,
         "reason": str(obj.get("reason", "")).strip()[:120],
     }
 

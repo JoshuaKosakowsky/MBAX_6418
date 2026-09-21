@@ -141,6 +141,58 @@ def cmd_eval_dashboard(args):
     eval_dashboard.build(rows, out_path=out, model=args.model)
 
 
+def cmd_emotions(args):
+    """Compare the LLM primary emotion against the NRC word-list emotion.
+
+    The LLM emotion comes from the extended binary prompt (Step 5); the NRC
+    emotion is derived offline from the review text with the bundled lexicon.
+    No extra model calls are made here.
+    """
+    from giftcards import nrc
+
+    src = Path(args.input) if args.input else config.PROCESSED_DIR / "eval_scored.jsonl"
+    if not src.exists():
+        sys.exit(f"Input not found: {src}. Run `main.py evaluate` first.")
+    rows = [json.loads(l) for l in src.open() if l.strip()]
+    ok = [r for r in rows if r.get("status") == "ok"]
+    lex = nrc.load_lexicon()
+
+    def _llm(r):
+        e = r.get("primary_emotion")
+        return str(e).lower() if e else None
+
+    llm = [_llm(r) for r in ok]
+    nrc_list = [nrc.primary_emotion(r.get("text", ""), lex) for r in ok]
+    stats = nrc.compare(llm, nrc_list)
+
+    print(f"Reviews: {len(ok)}")
+    print(f"Both-signal pairs : {stats['n']}")
+    print(f"Agree             : {stats['agree']}")
+    print(f"Disagree          : {stats['disagree']}")
+    print(f"Agreement rate    : {stats['agreement_rate']:.1%}")
+    print("\nLLM emotion distribution:", stats["llm_distribution"])
+    print("NRC  emotion distribution:", stats["nrc_distribution"])
+
+    shown = 0
+    for r, l, n in zip(ok, llm, nrc_list):
+        if l and n and l != n:
+            print(f"  LLM={l:<12} NRC={n:<12} | {str(r.get('title') or '')[:28]} :: {(r.get('text') or '')[:64]}")
+            shown += 1
+            if shown >= (args.show or 40):
+                break
+    if shown == 0:
+        print("\nNo divergences to show.")
+
+    out = Path(args.output) if args.output else config.PROCESSED_DIR / "emotion_compare.jsonl"
+    with open(out, "w", encoding="utf-8") as f:
+        for r, n in zip(ok, nrc_list):
+            rr = dict(r)
+            rr["primary_emotion"] = _llm(r)
+            rr["nrc_emotion"] = n
+            f.write(json.dumps(rr, default=str) + "\n")
+    print(f"\nSaved -> {out}")
+
+
 def cmd_dashboard(args):
     src = Path(args.input) if args.input else _latest_classified()
     if not src.exists():
@@ -217,6 +269,12 @@ def build_parser() -> argparse.ArgumentParser:
     evd.add_argument("--output", default=None)
     evd.add_argument("--model", default=None)
     evd.set_defaults(fn=cmd_eval_dashboard)
+
+    em = sub.add_parser("emotions", help="compare LLM vs NRC primary emotion")
+    em.add_argument("--input", default=None)
+    em.add_argument("--show", type=int, default=40)
+    em.add_argument("--output", default=None)
+    em.set_defaults(fn=cmd_emotions)
     return p
 
 
