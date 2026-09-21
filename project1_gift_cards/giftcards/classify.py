@@ -92,26 +92,43 @@ def classify_batch(
     max_workers: int | None = None,
     progress: Callable[[int, int], None] | None = None,
     max_reviews: int | None = None,
+    checkpoint_path: Path | None = None,
 ) -> list[dict]:
-    """Classify many reviews concurrently. Preserves input order."""
+    """Classify many reviews concurrently. Preserves input order.
+
+    If ``checkpoint_path`` is given, each completed result is appended to that
+    JSONL file immediately (on the caller thread), so a long run that is
+    interrupted is never fully lost — partial progress is persisted.
+    """
     inputs = reviews if max_reviews is None else reviews[:max_reviews]
     total = len(inputs)
     workers = max_workers or config.max_concurrency()
     results: list[dict] = [None] * total  # type: ignore[list-item]
+    if checkpoint_path is not None:
+        import os
+
+        os.makedirs(checkpoint_path.parent, exist_ok=True)
+    ckpt = open(checkpoint_path, "w", encoding="utf-8") if checkpoint_path else None
 
     def worker(i):
-        r = classify_one(inputs[i], client, model)
-        return i, r
+        return i, classify_one(inputs[i], client, model)
 
-    with cf.ThreadPoolExecutor(max_workers=workers) as pool:
-        futs = [pool.submit(worker, i) for i in range(total)]
-        done = 0
-        for fut in cf.as_completed(futs):
-            i, r = fut.result()
-            results[i] = r
-            done += 1
-            if progress:
-                progress(done, total)
+    try:
+        with cf.ThreadPoolExecutor(max_workers=workers) as pool:
+            futs = [pool.submit(worker, i) for i in range(total)]
+            done = 0
+            for fut in cf.as_completed(futs):
+                i, r = fut.result()
+                results[i] = r
+                done += 1
+                if ckpt:
+                    ckpt.write(json.dumps(r, default=str) + "\n")
+                    ckpt.flush()
+                if progress:
+                    progress(done, total)
+    finally:
+        if ckpt:
+            ckpt.close()
 
     return [r for r in results if r is not None]
 

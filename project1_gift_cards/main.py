@@ -48,10 +48,12 @@ def cmd_classify(args):
     reviews = [json.loads(l) for l in src.open() if l.strip()]
     model = args.model or config.default_model()
     print(f"Classifying {len(reviews)} reviews with model {model!r} (limit={args.limit or 'all'})")
+    ckpt = config.PROCESSED_DIR / "classified_sample.jsonl"
     results = classify.classify_batch(
         reviews, client, model=model,
         max_workers=args.concurrency, max_reviews=args.limit,
         progress=lambda d, t: print(f"  {d}/{t} done", end="\r"),
+        checkpoint_path=ckpt,
     )
     print()
     jl = classify.results_to_jsonl(results)
